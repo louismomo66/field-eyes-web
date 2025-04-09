@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  # Frontend React application
+  frontend:
+    build:
+      context: ./field-eyes-web
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+      - "443:443"
+    restart: unless-stopped
+    volumes:
+      - ./letsencrypt:/etc/letsencrypt
+    networks:
+      - fieldeyes-network
+    depends_on:
+      - backend
+
+  # Backend Go API service
+  backend:
+    build:
+      context: ./field_eyes
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    environment:
+      - DB_DSN=${DB_DSN}
+      - JWT_SECRET=${JWT_SECRET}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USERNAME=${SMTP_USERNAME}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_FROM=${SMTP_FROM}
+    networks:
+      - fieldeyes-network
+    depends_on:
+      - database
+
+  # Database service
+  database:
+    image: mysql:8.0
+    ports:
+      - "3306:3306"
+    restart: unless-stopped
+    environment:
+      - MYSQL_DATABASE=fieldeyes_db
+      - MYSQL_USER=${DB_USER}
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - fieldeyes-network
+
+networks:
+  fieldeyes-network:
+    driver: bridge
+
+volumes:
+  mysql-data: 
