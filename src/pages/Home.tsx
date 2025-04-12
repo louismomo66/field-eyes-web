@@ -44,16 +44,21 @@ const Home: React.FC = () => {
       setError(null);
       
       try {
+        console.log('Fetching devices from Home component...');
         const response = await deviceApi.getDevices();
+        console.log('Home component received devices response:', response);
+        console.log('Home component devices data:', response.data);
+        console.log('Setting devices state with:', response.data || []);
         setDevices(response.data || []);
         
         // Generate notifications based on device data
         if (response.data && response.data.length > 0) {
+          console.log('Generating notifications for devices:', response.data.length);
           generateDeviceNotifications(response.data);
         }
       } catch (err: any) {
+        console.error('Failed to fetch devices in Home component:', err);
         setError('Failed to fetch devices');
-        console.error(err);
       } finally {
         setLoading(false);
       }
@@ -133,8 +138,9 @@ const Home: React.FC = () => {
     }
   };
 
-  const handleViewDevice = (deviceId: number) => {
-    navigate('/dashboard', { state: { deviceId } });
+  const handleViewDevice = (deviceSerialNumber: string) => {
+    console.log('Navigating to dashboard with serial number:', deviceSerialNumber);
+    navigate('/dashboard', { state: { deviceSerialNumber } });
   };
 
   const formatTimeAgo = (timestamp: string) => {
@@ -309,7 +315,7 @@ const Home: React.FC = () => {
                     </thead>
                     <tbody>
                       {devices.map(device => (
-                        <tr key={device.id} style={{ cursor: 'pointer' }} onClick={() => handleViewDevice(device.id)}>
+                        <tr key={device.id} style={{ cursor: 'pointer' }} onClick={() => handleViewDevice(device.serial_number)}>
                           <td>
                             <div className="d-flex align-items-center">
                               <div className="me-3">
@@ -342,7 +348,7 @@ const Home: React.FC = () => {
                               className="btn btn-sm btn-outline-primary"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleViewDevice(device.id);
+                                handleViewDevice(device.serial_number);
                               }}
                               style={{ 
                                 color: '#62A800',

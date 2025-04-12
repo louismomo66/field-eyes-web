@@ -25,30 +25,14 @@ const Dashboard: React.FC = () => {
   const [devices, setDevices] = useState<Device[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   const [deviceLogs, setDeviceLogs] = useState<DeviceData[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [devicesLoading, setDevicesLoading] = useState(true);
+  const [logsLoading, setLogsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Get the device ID from the query string if provided
-  useEffect(() => {
-    const searchParams = new URLSearchParams(location.search);
-    const deviceId = searchParams.get('device');
-    
-    if (deviceId) {
-      const selectedDeviceId = parseInt(deviceId);
-      // When we have the devices list, select the device with the matching ID
-      if (devices.length > 0) {
-        const device = devices.find(d => d.id === selectedDeviceId);
-        if (device) {
-          setSelectedDevice(device);
-        }
-      }
-    }
-  }, [location.search, devices]);
 
   // Fetch user's devices
   useEffect(() => {
     const fetchDevices = async () => {
-      setLoading(true);
+      setDevicesLoading(true);
       setError(null);
       
       try {
@@ -58,7 +42,7 @@ const Dashboard: React.FC = () => {
         setError(err.response?.data?.message || 'Failed to fetch devices');
         setDevices([]);
       } finally {
-        setLoading(false);
+        setDevicesLoading(false);
       }
     };
 
@@ -67,27 +51,107 @@ const Dashboard: React.FC = () => {
 
   // Fetch device logs only when a device is selected
   useEffect(() => {
+    let isMounted = true;
+    
+    // Exit if no device is selected
+    if (!selectedDevice) {
+      return;
+    }
+    
+    // Get the current device's serial number for fetching logs
+    const serialNumber = selectedDevice.serial_number;
+    console.log(`Setting up logs fetch for device: ${serialNumber}`);
+    
+    // Clear previous device logs and show loading spinner ONLY when device changes
+    setDeviceLogs([]);
+    setLogsLoading(true);
+    setError(null);
+    
     const fetchDeviceLogs = async () => {
-      if (!selectedDevice) {
-        return;
-      }
-
-      setLoading(true);
-      setError(null);
-
+      // No loading state changes within the fetch function itself for interval calls
+      if (!isMounted) return;
+      
       try {
-        const response = await deviceApi.getDeviceLogs(selectedDevice.serial_number);
-        setDeviceLogs(response.data || []);
+        console.log(`Fetching logs for device ${serialNumber}`);
+        const response = await deviceApi.getDeviceLogs(serialNumber);
+        
+        if (!isMounted) return;
+        
+        // Only update if we have data
+        if (response.data && response.data.length > 0) {
+          // Sort logs by created_at timestamp
+          const sortedLogs = [...response.data].sort((a, b) => {
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+          });
+          
+          console.log('Logs sorted by created_at:', sortedLogs.map(log => log.created_at));
+          console.log('Latest log by created_at:', sortedLogs[0]);
+          
+          // Update deviceLogs state ONLY
+          setDeviceLogs(sortedLogs);
+        } else {
+          console.log(`No logs found for device ${serialNumber}`);
+          setDeviceLogs([]); // Ensure logs are cleared if API returns empty
+        }
       } catch (err: any) {
-        setError(err.response?.data?.message || 'Failed to fetch device logs');
-        setDeviceLogs([]);
+        if (isMounted) {
+          console.error('Error fetching device logs:', err);
+          setError(err.response?.data?.message || 'Failed to fetch device logs');
+          setDeviceLogs([]);
+        }
       } finally {
-        setLoading(false);
+        // Always ensure loading is turned off after a fetch completes
+        if (isMounted) {
+          setLogsLoading(false);
+        }
       }
     };
 
+    // Execute initial fetch
     fetchDeviceLogs();
-  }, [selectedDevice]);
+    
+    // Set up polling interval (every 5 seconds instead of 30)
+    const intervalId = setInterval(fetchDeviceLogs, 10000);
+    
+    return () => {
+      clearInterval(intervalId);
+      isMounted = false;
+    };
+  }, [selectedDevice?.serial_number]);
+
+  // Consolidated effect for setting initial selected device AFTER devices are loaded
+  useEffect(() => {
+    // Only run if devices are finished loading AND we haven't selected a device yet OR the selected device doesn't match the state
+    if (!devicesLoading && devices.length > 0) {
+      const deviceSerialNumberFromState = location.state?.deviceSerialNumber;
+      console.log('Consolidated effect: devices loaded. Serial from state:', deviceSerialNumberFromState);
+
+      let deviceToSelect: Device | null = null;
+
+      if (deviceSerialNumberFromState) {
+        console.log('Attempting to find device from state:', deviceSerialNumberFromState);
+        deviceToSelect = devices.find(d => d.serial_number === deviceSerialNumberFromState) || null;
+        if (!deviceToSelect) {
+          console.warn('Device serial from state not found, defaulting to first device.');
+        }
+      }
+
+      // If no device was found from state, or no state was passed, default to the first device
+      if (!deviceToSelect) {
+        deviceToSelect = devices[0];
+        console.log('Defaulting to first device:', deviceToSelect);
+      }
+      
+      // Only update state if the device to select is different from the current selected device
+      if (selectedDevice?.serial_number !== deviceToSelect?.serial_number) {
+         console.log('Setting selected device:', deviceToSelect);
+         setSelectedDevice(deviceToSelect);
+      } else {
+         console.log('Device to select is already selected, no state update needed.');
+      }
+    }
+    // Depend on devices list being loaded and the serial number from state
+  }, [devicesLoading, devices, location.state?.deviceSerialNumber]);
 
   // Auto-select first device if none is selected
   useEffect(() => {
@@ -96,8 +160,20 @@ const Dashboard: React.FC = () => {
     }
   }, [devices, selectedDevice]);
 
-  // If no devices are available, show a message to link a device
-  if (devices.length === 0) {
+  // Render loading state ONLY for the initial device list fetch
+  if (devicesLoading) {
+    return (
+      <div className="container mt-4 text-center">
+        <div className="spinner-border" role="status">
+          <span className="visually-hidden">Loading...</span>
+        </div>
+        <p className="mt-2">Loading devices...</p>
+      </div>
+    );
+  }
+  
+  // Show message if no devices were found after loading
+  if (!devicesLoading && devices.length === 0) {
     return (
       <div className="container mt-4">
         <div className="card">
@@ -120,36 +196,10 @@ const Dashboard: React.FC = () => {
     );
   }
 
-  // Remove the mockDeviceData section and directly use deviceLogs
-  // If no logs are available, display a message or fallback to empty array
   // Use deviceLogs directly, no need for the mock data fallback
   const data = deviceLogs;
-  const latestData = data.length > 0 ? data[data.length - 1] : null;
-
-  // Render loading state if still loading
-  if (loading) {
-    return (
-      <div className="container mt-4 text-center">
-        <div className="spinner-border" role="status">
-          <span className="visually-hidden">Loading...</span>
-        </div>
-      </div>
-    );
-  }
-
-  // If no data is available, show appropriate message
-  if (!latestData) {
-    return (
-      <div className="container mt-4">
-        <div className="card">
-          <div className="card-body text-center">
-            <h3 className="mb-3">No Data Available</h3>
-            <p className="mb-4">This device hasn't reported any data yet.</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Get the latest data (first item after sorting)
+  const latestData = data.length > 0 ? data[0] : null;
 
   // Helper functions for visual elements
   const getStatusColor = (status: string) => {
@@ -187,28 +237,48 @@ const Dashboard: React.FC = () => {
     return { text: 'Neutral', color: 'success' };
   };
 
+  // Helper function for dynamic device status based on last reading time
+  const getDynamicDeviceStatus = (lastReadingTimestamp?: string): { text: string; color: 'success' | 'danger' | 'warning' } => {
+    if (!lastReadingTimestamp) {
+      return { text: 'Unknown', color: 'warning' };
+    }
+    
+    const lastReadingDate = new Date(lastReadingTimestamp);
+    const now = new Date();
+    const diffSeconds = (now.getTime() - lastReadingDate.getTime()) / 1000;
+    
+    // Consider active if data received within the last 10 minutes (600 seconds)
+    if (diffSeconds <= 600) {
+      return { text: 'Active', color: 'success' };
+    } else {
+      // Inactive if no data for more than 10 minutes
+      return { text: 'Inactive', color: 'danger' };
+    }
+  };
+
   // Dashboard with cards for the selected device
   return (
     <div className="container-fluid p-4">
       <div className="d-flex justify-content-between align-items-center mb-4">
         <div>
           <h1 className="mb-1" style={{ fontWeight: 600, color: '#052816' }}>Dashboard</h1>
-          <p className="text-muted mb-0">Monitor your field sensors in real-time</p>
+          {/* <p className="text-muted mb-0">Monitor your field sensors in real-time</p> */}
         </div>
         <div className="d-flex align-items-center">
           <select
             className="form-select me-3 shadow-sm border-0"
-            value={selectedDevice?.id || ""}
+            value={selectedDevice?.serial_number || ""}
             onChange={(e) => {
-              const deviceId = parseInt(e.target.value);
-              const device = devices.find(d => d.id === deviceId);
+              const selectedSerialNumber = e.target.value;
+              const device = devices.find(d => d.serial_number === selectedSerialNumber);
+              console.log('Selected device from dropdown (by serial):', device);
               if (device) setSelectedDevice(device);
             }}
             style={{ minWidth: "220px", borderRadius: "10px" }}
           >
             <option value="" disabled>Select Device</option>
             {devices.map(device => (
-              <option key={device.id} value={device.id}>
+              <option key={device.id} value={device.serial_number}>
                 {device.name || device.device_type} - {device.location || device.serial_number}
               </option>
             ))}
@@ -250,15 +320,20 @@ const Dashboard: React.FC = () => {
                       <p className="text-muted small mb-0">{selectedDevice.location} · {selectedDevice.serial_number}</p>
                     </div>
                     <div className="ms-auto">
-                      <span className={`badge px-3 py-2`} style={{ 
-                        fontSize: '0.8rem', 
-                        borderRadius: "8px",
-                        backgroundColor: getStatusColor(selectedDevice.status) === 'success' ? '#62A800' : 
-                                       getStatusColor(selectedDevice.status) === 'danger' ? '#dc3545' : '#ffc107',
-                        color: 'white'
-                      }}>
-                        {selectedDevice.status?.charAt(0).toUpperCase() + selectedDevice.status?.slice(1) || 'Unknown'}
-                      </span>
+                      {(() => {
+                        const dynamicStatus = getDynamicDeviceStatus(latestData?.created_at);
+                        return (
+                          <span className={`badge px-3 py-2`} style={{ 
+                            fontSize: '0.8rem', 
+                            borderRadius: "8px",
+                            backgroundColor: dynamicStatus.color === 'success' ? '#62A800' : 
+                                           dynamicStatus.color === 'danger' ? '#dc3545' : '#ffc107',
+                            color: 'white'
+                          }}>
+                            {dynamicStatus.text}
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
@@ -323,7 +398,12 @@ const Dashboard: React.FC = () => {
                   <div className="d-flex justify-content-between mt-4">
                     <div className="text-center">
                       <div className="small text-muted mb-1">Last Reading</div>
-                      <div>{new Date(selectedDevice.last_reading).toLocaleTimeString()}</div>
+                      <div>
+                        {latestData ? 
+                          new Date(latestData.created_at).toLocaleString() : 
+                          'No readings yet'
+                        }
+                      </div>
                     </div>
                     <div className="text-center">
                       <div className="small text-muted mb-1">Connected Since</div>
@@ -336,7 +416,7 @@ const Dashboard: React.FC = () => {
             
             {/* Main metrics */}
             <div className="col-lg-8">
-              {loading ? (
+              {logsLoading ? (
                 <div className="text-center my-5">
                   <div className="spinner-border mb-3" style={{ color: '#62A800' }} role="status">
                     <span className="visually-hidden">Loading...</span>
@@ -360,7 +440,7 @@ const Dashboard: React.FC = () => {
                                 <h6 className="mb-0">Temperature</h6>
                               </div>
                               <div className="d-flex align-items-baseline">
-                                <h2 className="display-4 mb-0 me-2" style={{ fontWeight: "600" }}>{latestData.temperature.toFixed(1)}</h2>
+                                <h2 className="display-4 mb-0 me-2" style={{ fontWeight: "600" }}>{latestData?.temperature?.toFixed(1) ?? "0.0"}</h2>
                                 <span className="text-muted">°C</span>
                               </div>
                               <div className="text-muted small">Air temperature</div>
@@ -375,7 +455,7 @@ const Dashboard: React.FC = () => {
                                 <h6 className="mb-0">Humidity</h6>
                               </div>
                               <div className="d-flex align-items-baseline">
-                                <h2 className="display-4 mb-0 me-2" style={{ fontWeight: "600" }}>{latestData.humidity.toFixed(0)}</h2>
+                                <h2 className="display-4 mb-0 me-2" style={{ fontWeight: "600" }}>{latestData?.humidity?.toFixed(0) ?? "0"}</h2>
                                 <span className="text-muted">%</span>
                               </div>
                               <div className="text-muted small">Air humidity</div>
@@ -390,7 +470,7 @@ const Dashboard: React.FC = () => {
                                 <h6 className="mb-0">Soil Moisture</h6>
                               </div>
                               <div className="d-flex align-items-baseline">
-                                <h2 className="display-4 mb-0 me-2" style={{ fontWeight: "600" }}>{latestData.soil_moisture.toFixed(0)}</h2>
+                                <h2 className="display-4 mb-0 me-2" style={{ fontWeight: "600" }}>{latestData?.soil_moisture?.toFixed(0) ?? "0"}</h2>
                                 <span className="text-muted">%</span>
                               </div>
                               <div className="text-muted small">Moisture in soil</div>
@@ -437,23 +517,23 @@ const Dashboard: React.FC = () => {
                                       <path
                                         d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                                         fill="none"
-                                        stroke={latestData.ph < 6.0 ? '#ffc107' : latestData.ph > 7.5 ? '#052816' : '#62A800'}
+                                        stroke={(latestData?.ph ?? 7) < 6.0 ? '#ffc107' : (latestData?.ph ?? 7) > 7.5 ? '#052816' : '#62A800'}
                                         strokeWidth="3"
-                                        strokeDasharray={`${(latestData.ph / 14) * 100}, 100`}
+                                        strokeDasharray={`${((latestData?.ph ?? 7) / 14) * 100}, 100`}
                                       />
                                     </svg>
                                     <div className="position-absolute top-50 start-50 translate-middle text-center">
-                                      <div className="display-6" style={{ fontWeight: "600" }}>{latestData.ph.toFixed(1)}</div>
+                                      <div className="display-6" style={{ fontWeight: "600" }}>{latestData?.ph?.toFixed(1) ?? "7.0"}</div>
                                     </div>
                                   </div>
                                 </div>
                                 <div className="badge mt-2 text-white px-3 py-2" style={{ 
                                   borderRadius: "8px", 
                                   fontSize: "0.8rem",
-                                  backgroundColor: getPhStatus(latestData.ph).color === 'warning' ? '#ffc107' : 
-                                               getPhStatus(latestData.ph).color === 'info' ? '#052816' : '#62A800'
+                                  backgroundColor: getPhStatus(latestData?.ph ?? 7).color === 'warning' ? '#ffc107' : 
+                                               getPhStatus(latestData?.ph ?? 7).color === 'info' ? '#052816' : '#62A800'
                                 }}>
-                                  {getPhStatus(latestData.ph).text}
+                                  {getPhStatus(latestData?.ph ?? 7).text}
                                 </div>
                               </div>
                             </div>
@@ -468,10 +548,10 @@ const Dashboard: React.FC = () => {
                                     Nitrogen
                                   </span>
                                   <span style={{ 
-                                    color: getNutrientColor(latestData.nitrogen) === 'success' ? '#62A800' : 
-                                          getNutrientColor(latestData.nitrogen) === 'danger' ? '#dc3545' : '#ffc107'
+                                    color: getNutrientColor(latestData?.nitrogen ?? 0) === 'success' ? '#62A800' : 
+                                          getNutrientColor(latestData?.nitrogen ?? 0) === 'danger' ? '#dc3545' : '#ffc107'
                                   }}>
-                                    {getNutrientLevel(latestData.nitrogen)}
+                                    {getNutrientLevel(latestData?.nitrogen ?? 0)}
                                   </span>
                                 </div>
                                 <div className="progress" style={{ height: "8px", borderRadius: "5px" }}>
@@ -479,10 +559,10 @@ const Dashboard: React.FC = () => {
                                     className="progress-bar" 
                                     role="progressbar" 
                                     style={{ 
-                                      width: `${(latestData.nitrogen / 100) * 100}%`,
+                                      width: `${((latestData?.nitrogen ?? 0) / 100) * 100}%`,
                                       backgroundColor: '#62A800'
                                     }}
-                                    aria-valuenow={latestData.nitrogen}
+                                    aria-valuenow={latestData?.nitrogen ?? 0}
                                     aria-valuemin={0}
                                     aria-valuemax={100}
                                   ></div>
@@ -496,10 +576,10 @@ const Dashboard: React.FC = () => {
                                     Phosphorous
                                   </span>
                                   <span style={{ 
-                                    color: getNutrientColor(latestData.phosphorous) === 'success' ? '#62A800' : 
-                                          getNutrientColor(latestData.phosphorous) === 'danger' ? '#dc3545' : '#ffc107'
+                                    color: getNutrientColor(latestData?.phosphorous ?? 0) === 'success' ? '#62A800' : 
+                                          getNutrientColor(latestData?.phosphorous ?? 0) === 'danger' ? '#dc3545' : '#ffc107'
                                   }}>
-                                    {getNutrientLevel(latestData.phosphorous)}
+                                    {getNutrientLevel(latestData?.phosphorous ?? 0)}
                                   </span>
                                 </div>
                                 <div className="progress" style={{ height: "8px", borderRadius: "5px" }}>
@@ -507,10 +587,10 @@ const Dashboard: React.FC = () => {
                                     className="progress-bar" 
                                     role="progressbar" 
                                     style={{ 
-                                      width: `${(latestData.phosphorous / 100) * 100}%`,
+                                      width: `${((latestData?.phosphorous ?? 0) / 100) * 100}%`,
                                       backgroundColor: '#ffc107'
                                     }}
-                                    aria-valuenow={latestData.phosphorous}
+                                    aria-valuenow={latestData?.phosphorous ?? 0}
                                     aria-valuemin={0}
                                     aria-valuemax={100}
                                   ></div>
@@ -524,10 +604,10 @@ const Dashboard: React.FC = () => {
                                     Potassium
                                   </span>
                                   <span style={{ 
-                                    color: getNutrientColor(latestData.potassium) === 'success' ? '#62A800' : 
-                                          getNutrientColor(latestData.potassium) === 'danger' ? '#dc3545' : '#ffc107'
+                                    color: getNutrientColor(latestData?.potassium ?? 0) === 'success' ? '#62A800' : 
+                                          getNutrientColor(latestData?.potassium ?? 0) === 'danger' ? '#dc3545' : '#ffc107'
                                   }}>
-                                    {getNutrientLevel(latestData.potassium)}
+                                    {getNutrientLevel(latestData?.potassium ?? 0)}
                                   </span>
                                 </div>
                                 <div className="progress" style={{ height: "8px", borderRadius: "5px" }}>
@@ -535,10 +615,10 @@ const Dashboard: React.FC = () => {
                                     className="progress-bar" 
                                     role="progressbar" 
                                     style={{ 
-                                      width: `${(latestData.potassium / 100) * 100}%`,
+                                      width: `${((latestData?.potassium ?? 0) / 100) * 100}%`,
                                       backgroundColor: '#052816'
                                     }}
-                                    aria-valuenow={latestData.potassium}
+                                    aria-valuenow={latestData?.potassium ?? 0}
                                     aria-valuemin={0}
                                     aria-valuemax={100}
                                   ></div>
@@ -561,7 +641,7 @@ const Dashboard: React.FC = () => {
                         </div>
                         <div className="card-body p-0">
                           <ul className="list-group list-group-flush">
-                            {latestData.soil_moisture < 40 && (
+                            {(latestData?.soil_moisture ?? 0) < 40 && (
                               <li className="list-group-item border-0 py-3">
                                 <div className="d-flex">
                                   <div className="me-3">
@@ -576,7 +656,7 @@ const Dashboard: React.FC = () => {
                                 </div>
                               </li>
                             )}
-                            {latestData.ph < 6.0 && (
+                            {(latestData?.ph ?? 7) < 6.0 && (
                               <li className="list-group-item border-0 py-3">
                                 <div className="d-flex">
                                   <div className="me-3">
@@ -591,7 +671,7 @@ const Dashboard: React.FC = () => {
                                 </div>
                               </li>
                             )}
-                            {latestData.ph > 7.5 && (
+                            {(latestData?.ph ?? 7) > 7.5 && (
                               <li className="list-group-item border-0 py-3">
                                 <div className="d-flex">
                                   <div className="me-3">
@@ -606,7 +686,7 @@ const Dashboard: React.FC = () => {
                                 </div>
                               </li>
                             )}
-                            {latestData.nitrogen < 30 && (
+                            {(latestData?.nitrogen ?? 0) < 30 && (
                               <li className="list-group-item border-0 py-3">
                                 <div className="d-flex">
                                   <div className="me-3">
@@ -621,7 +701,7 @@ const Dashboard: React.FC = () => {
                                 </div>
                               </li>
                             )}
-                            {latestData.phosphorous < 20 && (
+                            {(latestData?.phosphorous ?? 0) < 20 && (
                               <li className="list-group-item border-0 py-3">
                                 <div className="d-flex">
                                   <div className="me-3">
@@ -636,7 +716,7 @@ const Dashboard: React.FC = () => {
                                 </div>
                               </li>
                             )}
-                            {latestData.potassium < 25 && (
+                            {(latestData?.potassium ?? 0) < 25 && (
                               <li className="list-group-item border-0 py-3">
                                 <div className="d-flex">
                                   <div className="me-3">
@@ -651,11 +731,11 @@ const Dashboard: React.FC = () => {
                                 </div>
                               </li>
                             )}
-                            {(latestData.soil_moisture >= 40 && 
-                              latestData.ph >= 6.0 && latestData.ph <= 7.5 && 
-                              latestData.nitrogen >= 30 && 
-                              latestData.phosphorous >= 20 && 
-                              latestData.potassium >= 25) && (
+                            {(latestData?.soil_moisture ?? 0) >= 40 && 
+                             (latestData?.ph ?? 7) >= 6.0 && (latestData?.ph ?? 7) <= 7.5 && 
+                             (latestData?.nitrogen ?? 0) >= 30 && 
+                             (latestData?.phosphorous ?? 0) >= 20 && 
+                             (latestData?.potassium ?? 0) >= 25 && (
                               <li className="list-group-item border-0 py-3">
                                 <div className="d-flex">
                                   <div className="me-3">
@@ -671,11 +751,12 @@ const Dashboard: React.FC = () => {
                               </li>
                             )}
                             {/* In case there are no recommendations, show this */}
-                            {(latestData.soil_moisture === 0 &&
-                              latestData.ph === 0 &&
-                              latestData.nitrogen === 0 &&
-                              latestData.phosphorous === 0 &&
-                              latestData.potassium === 0) && (
+                            {(!latestData || (
+                              (latestData?.soil_moisture === 0 || latestData?.soil_moisture === undefined) &&
+                              (latestData?.ph === 0 || latestData?.ph === undefined) &&
+                              (latestData?.nitrogen === 0 || latestData?.nitrogen === undefined) &&
+                              (latestData?.phosphorous === 0 || latestData?.phosphorous === undefined) &&
+                              (latestData?.potassium === 0 || latestData?.potassium === undefined))) && (
                               <li className="list-group-item border-0 py-3">
                                 <div className="d-flex">
                                   <div className="me-3">

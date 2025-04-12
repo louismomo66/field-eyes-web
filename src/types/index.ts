@@ -49,6 +49,8 @@ export interface DeviceData {
   longitude: number;
   latitude: number;
   created_at: string;
+  timestamp?: string;
+  UpdatedAt?: string;
 }
 
 // Analysis types

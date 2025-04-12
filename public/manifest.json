@@ -1,6 +1,6 @@
 {
-  "short_name": "React App",
-  "name": "Create React App Sample",
+  "short_name": "FieldEyes",
+  "name": "FieldEyes - Smart Agricultural Monitoring",
   "icons": [
     {
       "src": "favicon.ico",
@@ -20,6 +20,10 @@
   ],
   "start_url": ".",
   "display": "standalone",
-  "theme_color": "#000000",
-  "background_color": "#ffffff"
+  "theme_color": "#052816",
+  "background_color": "#ffffff",
+  "orientation": "portrait-primary",
+  "prefer_related_applications": false,
+  "description": "Smart Agricultural Monitoring Platform for Precision Agriculture",
+  "scope": "/"
 }
